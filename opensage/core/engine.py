@@ -72,6 +72,7 @@ Always:
         work_dir: Optional[str] = None,
         verbose: bool = True,
         max_iterations: int = 15,
+        base_url: Optional[str] = None,
     ):
         """
         Initialize the OpenSage engine.
@@ -82,6 +83,7 @@ Always:
             work_dir: Working directory for file operations
             verbose: Print agent reasoning steps
             max_iterations: Max iterations per agent run
+            base_url: Optional base URL override (e.g. for OpenRouter)
         """
         self.model = model
         self.verbose = verbose
@@ -91,6 +93,7 @@ Always:
         self.llm = ClaudeClient(
             api_key=api_key or os.environ.get("ANTHROPIC_API_KEY"),
             model=model,
+            base_url=base_url,
         )
 
         # Shared execution environment

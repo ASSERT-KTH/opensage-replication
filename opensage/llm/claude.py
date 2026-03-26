@@ -26,6 +26,7 @@ class ClaudeClient(LLMClient):
         self,
         api_key: Optional[str] = None,
         model: str = "claude-opus-4-5",
+        base_url: Optional[str] = None,
     ):
         """
         Initialize the Claude client.
@@ -33,10 +34,14 @@ class ClaudeClient(LLMClient):
         Args:
             api_key: Anthropic API key (falls back to ANTHROPIC_API_KEY env var)
             model: Claude model to use
+            base_url: Optional base URL override (e.g. for OpenRouter)
         """
         self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
         self.model = model
-        self.client = anthropic.Anthropic(api_key=self.api_key)
+        client_kwargs: Dict[str, Any] = {"api_key": self.api_key}
+        if base_url:
+            client_kwargs["base_url"] = base_url
+        self.client = anthropic.Anthropic(**client_kwargs)
 
     def chat(
         self,

@@ -18,7 +18,9 @@ Usage:
     result = engine.solve("Fix the bug in fibonacci.py")
 """
 
+import json
 import os
+import re
 import time
 from typing import Any, Dict, List, Optional
 
@@ -155,6 +157,7 @@ Always:
         topology: str = "auto",
         agent_name: str = "SageAgent",
         system_prompt: Optional[str] = None,
+        experiment_name: Optional[str] = None,
     ) -> str:
         """
         Solve a task using OpenSage.
@@ -170,6 +173,7 @@ Always:
                 - single: Single agent, no sub-agents
             agent_name: Name for the root agent
             system_prompt: Optional custom system prompt
+            experiment_name: Save trajectory to experiments/{name}/ when provided
 
         Returns:
             The final solution string
@@ -204,7 +208,76 @@ Always:
             print(f"[OpenSage] Memory nodes: {mem_summary['total_nodes']}")
             print(f"{'='*60}")
 
+        if experiment_name:
+            self._save_trajectory(experiment_name, task, topology, elapsed, agent, result)
+
         return result
+
+    def _save_trajectory(
+        self,
+        name: str,
+        task: str,
+        topology: str,
+        elapsed: float,
+        agent: "SageAgent",
+        result: str,
+    ) -> None:
+        """Write trajectory files to experiments/{name}/."""
+        # Sanitise name for use as a directory component
+        safe_name = re.sub(r"[^a-zA-Z0-9_\-]", "_", name)
+        out_dir = os.path.join("experiments", safe_name)
+        os.makedirs(out_dir, exist_ok=True)
+
+        status = agent.get_status()
+        record = {
+            "experiment": safe_name,
+            "task": task,
+            "topology": topology,
+            "model": self.model,
+            "elapsed_s": round(elapsed, 3),
+            "iterations": len(agent.trajectory),
+            "sub_agents_created": status["sub_agents"],
+            "ai_generated_tools": status["ai_generated_tools"],
+            "memory_nodes": status["memory_summary"]["total_nodes"],
+            "final_result": result,
+            "steps": agent.trajectory,
+        }
+
+        json_path = os.path.join(out_dir, "trajectory.json")
+        with open(json_path, "w") as f:
+            json.dump(record, f, indent=2, default=str)
+
+        txt_path = os.path.join(out_dir, "trajectory.txt")
+        with open(txt_path, "w") as f:
+            f.write(f"experiment : {safe_name}\n")
+            f.write(f"task       : {task}\n")
+            f.write(f"topology   : {topology}\n")
+            f.write(f"model      : {self.model}\n")
+            f.write(f"elapsed    : {elapsed:.1f}s\n")
+            f.write("=" * 60 + "\n\n")
+            for step in agent.trajectory:
+                tag = "[FINAL]" if step.get("final") else f"[iter {step['iteration']}]"
+                f.write(f"{tag}  +{step['elapsed_s']}s\n")
+                if step.get("thinking"):
+                    f.write(f"  thinking: {step['thinking']}\n")
+                for tc in step.get("tool_calls", []):
+                    args_preview = ", ".join(
+                        f"{k}={str(v)[:60]!r}" for k, v in tc["arguments"].items()
+                    )
+                    f.write(f"  → {tc['name']}({args_preview})\n")
+                    f.write(f"  ← {tc['result'][:200]}\n")
+                tokens = step.get("tokens", {})
+                if tokens:
+                    f.write(f"  tokens: in={tokens.get('input')} out={tokens.get('output')}\n")
+                f.write("\n")
+            f.write("=" * 60 + "\n")
+            f.write("RESULT\n")
+            f.write("=" * 60 + "\n")
+            f.write(result + "\n")
+
+        if self.verbose:
+            print(f"[OpenSage] Trajectory saved → {out_dir}/")
+
 
     def _solve_vertical(self, agent: SageAgent, task: str) -> str:
         """Execute with forced vertical topology."""

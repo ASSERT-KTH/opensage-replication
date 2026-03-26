@@ -86,6 +86,9 @@ class SageAgent:
         # Sub-agents created by this agent at runtime
         self._sub_agents: Dict[str, "SageAgent"] = {}
 
+        # Trajectory recorded during the last run()
+        self.trajectory: List[Dict[str, Any]] = []
+
         # Memory agent for background maintenance
         self._memory_agent = MemoryAgent(self.memory, self.llm)
 
@@ -495,11 +498,15 @@ class SageAgent:
         """
         task_id = self.memory.start_task(task)
         conversation: List[Dict[str, Any]] = [{"role": "user", "content": task}]
+        self.trajectory = []
+        run_start = time.time()
 
         if self.verbose:
             print(f"\n[{self.name}] Starting task: {task[:100]}...")
 
         for iteration in range(self.max_iterations):
+            iter_start = time.time()
+
             # Build system prompt with current memory context
             memory_context = self.memory.get_recent_context(max_tokens=1500)
             full_system = self._build_system_prompt(memory_context)
@@ -526,6 +533,19 @@ class SageAgent:
                 final_answer = response.content
                 self.memory.record_result(final_answer, task_id=task_id)
 
+                self.trajectory.append({
+                    "iteration": iteration + 1,
+                    "timestamp": iter_start,
+                    "elapsed_s": round(time.time() - run_start, 3),
+                    "thinking": response.content,
+                    "tool_calls": [],
+                    "tokens": {
+                        "input": response.input_tokens,
+                        "output": response.output_tokens,
+                    },
+                    "final": True,
+                })
+
                 # Run memory maintenance in background
                 try:
                     self._memory_agent.summarize_long_nodes()
@@ -549,6 +569,7 @@ class SageAgent:
 
             # Execute all tool calls and collect results
             tool_results_content = []
+            step_tool_calls = []
             for tool_call in response.tool_calls:
                 if self.verbose:
                     print(f"  [{self.name}] → {tool_call.name}({list(tool_call.arguments.keys())})")
@@ -572,6 +593,26 @@ class SageAgent:
                     "tool_use_id": tool_call.id,
                     "content": result_str,
                 })
+
+                step_tool_calls.append({
+                    "id": tool_call.id,
+                    "name": tool_call.name,
+                    "arguments": tool_call.arguments,
+                    "result": result_str,
+                })
+
+            self.trajectory.append({
+                "iteration": iteration + 1,
+                "timestamp": iter_start,
+                "elapsed_s": round(time.time() - run_start, 3),
+                "thinking": response.content,
+                "tool_calls": step_tool_calls,
+                "tokens": {
+                    "input": response.input_tokens,
+                    "output": response.output_tokens,
+                },
+                "final": False,
+            })
 
             # Add tool results as user message
             conversation.append({
@@ -597,6 +638,17 @@ class SageAgent:
             final = final_response.content
         except Exception as e:
             final = f"Agent reached max iterations. Last error: {e}"
+
+        self.trajectory.append({
+            "iteration": self.max_iterations + 1,
+            "timestamp": time.time(),
+            "elapsed_s": round(time.time() - run_start, 3),
+            "thinking": final,
+            "tool_calls": [],
+            "tokens": {},
+            "final": True,
+            "forced": True,
+        })
 
         self.memory.record_result(final, task_id=task_id)
         return final
